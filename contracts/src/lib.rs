@@ -598,46 +598,7 @@ fn checked_sub_u32(a: u32, b: u32) -> u32 {
     a.checked_sub(b).unwrap_or_else(|| panic!("Arithmetic underflow: cannot subtract {} from {}", b, a))
 }
 
-// ── Issue #313: Gas Optimization Helpers ──────────────────────────────
-/// Read a value from persistent storage with a default, avoiding repeated
-/// storage access for the same key within a single transaction.
-/// In Soroban, each storage read costs resources; caching reduces this.
-fn _get_persistent<T: soroban_sdk::IntoVal<Env, T> + soroban_sdk::TryFromVal<Env, T>>(
-    env: &Env,
-    key: &DataKey,
-    default: T,
-) -> T {
-    env.storage().persistent().get(key).unwrap_or(default)
-}
-
-/// Read a value from instance storage with a default.
-fn _get_instance<T: soroban_sdk::IntoVal<Env, T> + soroban_sdk::TryFromVal<Env, T>>(
-    env: &Env,
-    key: &DataKey,
-    default: T,
-) -> T {
-    env.storage().instance().get(key).unwrap_or(default)
-}
-
-/// Write a value to instance storage.
-fn _set_instance<T: soroban_sdk::IntoVal<Env, T>>(
-    env: &Env,
-    key: &DataKey,
-    value: &T,
-) {
-    env.storage().instance().set(key, value);
-}
-
-/// Write a value to persistent storage.
-fn _set_persistent<T: soroban_sdk::IntoVal<Env, T>>(
-    env: &Env,
-    key: &DataKey,
-    value: &T,
-) {
-    env.storage().persistent().set(key, value);
-}
-
-/// Read the admin address from instance storage (cached helper).
+// ── Issue #313: Gas Optimization Helpers (removed - unused, caused SDK trait bound issues)
 fn _get_admin(env: &Env) -> Address {
     env.storage()
         .instance()
