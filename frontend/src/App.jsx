@@ -351,7 +351,6 @@ function App() {
   } = useAssetStore();
 
   const [buyAmount, setBuyAmount] = useState(1);
-  const [confirmPending, setConfirmPending] = useState(false);
   const [loadingMeta] = useState(false);
   const [txError, setTxError] = useState(null);
   const [txResult, setTxResult] = useState(null);
@@ -506,7 +505,6 @@ function App() {
     help: () => setShortcutHelpOpen((prev) => !prev),
     escape: () => {
       setShortcutHelpOpen(false);
-      setConfirmPending(false);
     },
   });
 
@@ -765,28 +763,11 @@ function App() {
     };
   }, [publicKey, activeProvider, checkConnection, disconnectWallet]);
 
-  const handleBuyShares = useCallback(() => {
+  const handleBuyShares = useCallback(async (purchaseDetails) => {
     if (!publicKey) return;
     if (networkMismatch) {
       addToast({
         message: `Freighter is on the wrong network. Switch it to ${expectedNetworkLabel} and try again.`,
-        type: 'error',
-      });
-      recheckNetwork();
-      return;
-    }
-    if (buyAmount < 1) {
-      addToast({ message: MUST_BUY_AT_LEAST_ONE_SHARE, type: 'error' });
-      return;
-    }
-    setConfirmPending(true);
-  }, [publicKey, buyAmount, addToast, networkMismatch, expectedNetworkLabel, recheckNetwork]);
-
-  const handleConfirmBuy = async () => {
-    if (networkMismatch) {
-      setConfirmPending(false);
-      addToast({
-        message: `Transaction blocked: Freighter must be switched to ${expectedNetworkLabel} first.`,
         type: 'error',
       });
       recheckNetwork();
@@ -806,41 +787,41 @@ function App() {
     setLastTxHash(null);
     try {
       const scValBuyer = nativeToScVal(publicKey, { type: 'address' });
-      const scValShares = nativeToScVal(buyAmount, { type: 'u32' });
+      const scValShares = nativeToScVal(purchaseDetails.amount, { type: 'u32' });
       const scValToken = nativeToScVal(paymentToken, { type: 'address' });
 
       // Store purchase details for WebSocket broadcast on confirmation
-      lastPurchaseRef.current = { amount: buyAmount, timestamp: Date.now() };
+      lastPurchaseRef.current = { amount: purchaseDetails.amount, timestamp: Date.now() };
 
       // Set pending transaction marker before submission (Issue #719)
       setPendingTx({
         txHash: null, // Will be set after submission
-        amount: buyAmount,
+        amount: purchaseDetails.amount,
         contractId: CONTRACT_ID,
         publicKey,
       });
 
       const submitRes = await buySharesTx.execute([scValBuyer, scValShares, scValToken]);
-      setConfirmPending(false);
       const { hash } = submitRes;
       setLastTxHash(hash);
       
       // Update pending transaction with the actual hash
       setPendingTx({
         txHash: hash,
-        amount: buyAmount,
+        amount: purchaseDetails.amount,
         contractId: CONTRACT_ID,
         publicKey,
       });
       
       pendingToastRef.current = addToast({ message: TX_SUBMITTED, type: 'pending', txHash: hash });
+      return { txHash: hash };
     } catch (err) {
-      setConfirmPending(false);
       // Clear pending transaction marker on submission error
       clearPendingTx();
       addToast(toToastError(err, { operation: 'buy_shares' }));
+      throw err;
     }
-  };
+  }, [publicKey, networkMismatch, expectedNetworkLabel, recheckNetwork, hasPendingTx, paymentToken, buySharesTx, addToast, clearPendingTx]);
 
   return (
     <div className={styles.container}>
@@ -1228,15 +1209,6 @@ function App() {
           </>
         )}
 
-      {confirmPending && (
-        <ConfirmPurchase
-          shares={buyAmount}
-          pricePerShare={pricePerShare}
-          onConfirm={handleConfirmBuy}
-          onCancel={() => setConfirmPending(false)}
-          loading={loadingBuy}
-        />
-      )}
 
       {/* Wallet manager modal (Issue #791) */}
       <Suspense fallback={null}>

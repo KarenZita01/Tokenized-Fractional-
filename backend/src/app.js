@@ -209,7 +209,9 @@ app.use(
     allowedHeaders: ['Content-Type', 'x-api-key', 'X-Request-ID'],
   }),
 );
-app.use(express.json({ limit: '10kb' }));
+// Request body size limit: 1MB for asset metadata (including descriptions, images, documents)
+// This is documented and tested - see __tests__/requestBodySize.test.js
+app.use(express.json({ limit: '1mb' }));
 
 // Strict user-input sanitization (DOMPurify + encoding) applied to every
 // incoming request body, query, and params BEFORE it reaches a handler and
@@ -293,6 +295,7 @@ app.use(
       docExpansion: 'none',
       filter: true,
       displayRequestDuration: true,
+      persistAuthorization: true,
     },
   }),
 );

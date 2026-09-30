@@ -676,53 +676,42 @@ app.use('/api/admin/rate-limits', rateLimitAdminRoutes);
  *             schema:
  *               $ref: '#/components/schemas/HealthResponse'
  */
-app.get('/health', async (_req, res) => {
-  const deploymentColor = process.env.DEPLOYMENT_COLOR || 'local';
-  const serviceName = process.env.SERVICE_NAME || 'backend';
-  const buildId = process.env.BUILD_ID || process.env.GITHUB_SHA || 'local';
-  const deps = {
-    storage: { status: 'ok' },
-    redis: { status: 'not_configured' },
-  };
 
-  // Issue #801: report free space on the volume holding DATA_FILE.
-  //
-  // Informational only — this deliberately does NOT influence the HTTP status.
-  // Render restarts an instance whose health check fails, and restarting
-  // mid-fill-up is more likely to lose the pending write than to reclaim space.
-  // Alerting lives in scripts/check-disk-usage.js and the disk_usage_ratio
-  // gauge; the procedure is in docs/disk-usage-monitoring.md.
-  const diskUsage = await readDiskUsage(resolveDataDirectory(__dirname));
-  deps.disk = {
-    status: diskUsage.status,
-    usedPercent: diskUsage.usedPercent,
-    available: diskUsage.available,
-    thresholds: diskUsage.thresholds,
-    ...(diskUsage.message && { message: diskUsage.message }),
-  };
+// Storage health check helper
+async function checkStorageHealth() {
+  const dataFile = process.env.DATA_FILE || "data.json";
+  const resolvedPath = require("path").resolve(process.cwd(), dataFile);
+  const dirPath = require("path").dirname(resolvedPath);
 
-  // Check Redis if configured
-  if (process.env.REDIS_URL) {
+  try {
+    await require("fs").promises.access(resolvedPath, require("fs").constants.R_OK | require("fs").constants.W_OK);
+    return { status: "ok" };
+  } catch (err) {
     try {
-      const Redis = (await import('ioredis')).default;
-      // Reuse the same TLS options as the main cache client so the health
-      // check honours REDIS_TLS, REDIS_TLS_CA, REDIS_TLS_CERT, REDIS_TLS_KEY
-      // and REDIS_TLS_REJECT_UNAUTHORIZED.
-      const tlsOptions = buildTlsOptions();
-      const pingClient = new Redis(process.env.REDIS_URL, {
-        lazyConnect: true,
-        connectTimeout: 2000,
-        maxRetriesPerRequest: 0,
-        ...(tlsOptions && { tls: tlsOptions }),
-      });
-      await pingClient.connect();
-      await pingClient.ping();
-      pingClient.disconnect();
-      deps.redis = { status: 'ok' };
-    } catch {
-      deps.redis = { status: 'error', message: 'Redis configured but unreachable' };
-      return res.status(503).json({ status: 'degraded', timestamp: new Date().toISOString(), dependencies: deps });
+      await require("fs").promises.access(dirPath, require("fs").constants.W_OK);
+      return { status: "ok", note: "file will be created on write" };
+    } catch (dirErr) {
+      return { status: "degraded", error: err.message };
     }
+  }
+}
+
+// Enhanced health check endpoint
+app.get("/health", async (req, res) => {
+  const storageHealth = await checkStorageHealth();
+  const isHealthy = storageHealth.status === "ok";
+
+  const healthResponse = {
+    status: isHealthy ? "ok" : "degraded",
+    timestamp: new Date().toISOString(),
+    dependencies: {
+      storage: storageHealth
+    }
+  };
+
+  res.status(isHealthy ? 200 : 503).json(healthResponse);
+});
+
   }
 
   res.json({
@@ -2100,3 +2089,12 @@ if (process.env.NODE_ENV !== 'test') {
   wsManager.initialize(httpServer);
   wsManager.connectRedisAdapter();
 }
+if (require.main === module) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+}
+
+// Export the app for testing and OpenAPI verification
+module.exports = app;
