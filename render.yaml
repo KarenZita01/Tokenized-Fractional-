@@ -117,6 +117,11 @@ services:
         value: https://rwa-marketplace-backend-blue.onrender.com
       - key: VITE_CDN_URL
         sync: false   # set to the CDN origin for static frontend assets
+      # Issue #797: the independent public status page this build's footer links
+      # to. Set it in the Render dashboard to wherever `status/` is deployed —
+      # deliberately not the same service this page reports on.
+      - key: VITE_STATUS_URL
+        sync: false
 
   # ── Frontend (Static Site, Green) ──────────────────────────────────────────
   - type: web
@@ -150,3 +155,8 @@ services:
         value: https://rwa-marketplace-backend-green.onrender.com
       - key: VITE_CDN_URL
         sync: false   # set to the CDN origin for static frontend assets
+      # Issue #797: the independent public status page this build's footer links
+      # to. Set it in the Render dashboard to wherever `status/` is deployed —
+      # deliberately not the same service this page reports on.
+      - key: VITE_STATUS_URL
+        sync: false

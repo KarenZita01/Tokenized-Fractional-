@@ -180,14 +180,28 @@ describe('GET /api/rwa', () => {
 
 // ── POST /api/rwa ─────────────────────────────────────────────────────────────
 describe('POST /api/rwa', () => {
+  // Issue #706: POST is create-only, so use a contractId that is not created
+  // elsewhere in this suite and assert the duplicate-ID conflict explicitly.
+  const CREATE_ID = 'C' + 'P'.repeat(55);
+
   test('creates asset with valid key and body', async () => {
     const res = await request(app)
       .post('/api/rwa')
       .set('x-api-key', API_KEY)
-      .send(VALID_BODY);
+      .send({ ...VALID_BODY, contractId: CREATE_ID });
     expect(res.status).toBe(201);
-    expect(res.body.contractId).toBe(VALID_ID);
+    expect(res.body.contractId).toBe(CREATE_ID);
     expect(res.body.title).toBe('Test Property');
+  });
+
+  test('returns 409 Conflict for a duplicate contractId', async () => {
+    const res = await request(app)
+      .post('/api/rwa')
+      .set('x-api-key', API_KEY)
+      .send({ ...VALID_BODY, contractId: CREATE_ID, title: 'Overwrite Attempt' });
+    expect(res.status).toBe(409);
+    expect(res.body.detail).toMatch(/already exists/i);
+    expect(res.body.code).toBe('ASSET_ALREADY_EXISTS');
   });
 
   test('rejects missing API key', async () => {
@@ -428,14 +442,27 @@ describe('GET /sitemap.xml', () => {
 
 // ── Versioned routes: POST /api/v1/rwa ────────────────────────────────────────
 describe('POST /api/v1/rwa', () => {
+  // Issue #706: create-only — distinct id for the happy path, plus the
+  // duplicate-ID conflict on the versioned prefix.
+  const CREATE_ID = 'C' + 'Q'.repeat(55);
+
   test('creates asset with valid key and body', async () => {
     const res = await request(app)
       .post('/api/v1/rwa')
       .set('x-api-key', API_KEY)
-      .send(VALID_BODY);
+      .send({ ...VALID_BODY, contractId: CREATE_ID });
     expect(res.status).toBe(201);
-    expect(res.body.contractId).toBe(VALID_ID);
+    expect(res.body.contractId).toBe(CREATE_ID);
     expect(res.body.title).toBe('Test Property');
+  });
+
+  test('returns 409 Conflict for a duplicate contractId', async () => {
+    const res = await request(app)
+      .post('/api/v1/rwa')
+      .set('x-api-key', API_KEY)
+      .send({ ...VALID_BODY, contractId: CREATE_ID });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ASSET_ALREADY_EXISTS');
   });
 
   test('rejects missing API key', async () => {

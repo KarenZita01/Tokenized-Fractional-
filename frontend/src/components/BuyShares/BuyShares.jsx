@@ -14,6 +14,7 @@ import {
   createInitialBuyFlowState,
   isBuyFlowOpen,
 } from '../../machines/buyFlowMachine';
+import { useDebouncedCallback } from '../../hooks/useDebounce';
 import styles from './BuyShares.module.css';
 
 const STROOP = 10_000_000;
@@ -44,6 +45,8 @@ export default function BuyShares({
   shareUrl = '',
   userWalletBalance = null, // in stroops or XLM
   recentTransactions = [],
+  hasPendingTx = false,
+  recoveringTx = false,
 }) {
   const [localBuyAmount, setLocalBuyAmount] = useState(1);
   const [gasTier, setGasTier] = useState('standard');
@@ -59,10 +62,21 @@ export default function BuyShares({
   const isControlled = controlledBuyAmount !== undefined && onBuyAmountChange !== undefined;
   const buyAmount = isControlled ? controlledBuyAmount : localBuyAmount;
 
+  // Debounce the controlled callback to prevent rapid successive calls (e.g., RPC calls)
+  // when typing in the buy amount input field
+  const debouncedOnBuyAmountChange = useDebouncedCallback(
+    (val) => {
+      if (isControlled && onBuyAmountChange) {
+        onBuyAmountChange(val);
+      }
+    },
+    400 // 400ms debounce delay
+  );
+
   const setBuyAmount = (val) => {
     const parsed = Math.max(1, Math.floor(Number(val) || 1));
     if (isControlled) {
-      onBuyAmountChange(parsed);
+      debouncedOnBuyAmountChange(parsed);
     } else {
       setLocalBuyAmount(parsed);
     }
@@ -261,6 +275,23 @@ export default function BuyShares({
       </div>
       <hr className={styles.divider} />
 
+      {/* ── Pending Transaction Recovery Alert (Issue #719) ─────────────────── */}
+      {hasPendingTx && (
+        <div className={styles.pendingTxAlert}>
+          {recoveringTx ? (
+            <>
+              <Spinner size="sm" label="Checking transaction status…" />
+              <span>Checking the status of your pending transaction…</span>
+            </>
+          ) : (
+            <>
+              <span>You have a pending transaction from your previous session. </span>
+              <span style={{ fontWeight: 'bold' }}>Please wait for it to complete before starting a new purchase.</span>
+            </>
+          )}
+        </div>
+      )}
+
       <h3 className={styles.purchaseHeader}>Buy Fractional Shares</h3>
 
       {acceptedTokens.length > 1 && (
@@ -292,16 +323,16 @@ export default function BuyShares({
           onChange={(e) => setBuyAmount(e.target.value)}
           min="1"
           max={availableShares ?? undefined}
-          disabled={loadingBuy}
+          disabled={loadingBuy || hasPendingTx}
           className={styles.buyInput}
         />
         <Button
           onClick={handleOpenConfirm}
           loading={loadingBuy}
-          disabled={!!validationError || loadingBuy}
+          disabled={!!validationError || loadingBuy || hasPendingTx}
           variant="primary"
         >
-          {loadingBuy ? 'Processing…' : 'Review Purchase'}
+          {loadingBuy ? 'Processing…' : hasPendingTx ? 'Pending Transaction' : 'Review Purchase'}
         </Button>
       </div>
 

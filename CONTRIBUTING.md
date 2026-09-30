@@ -10,6 +10,10 @@ Thank you for your interest in contributing! This document outlines the process 
 - [Code Style Guidelines](#code-style-guidelines)
 - [Branch Naming Conventions](#branch-naming-conventions)
 - [Pull Request Process](#pull-request-process)
+- [Code Ownership and Review](#code-ownership-and-review)
+- [Dependency Updates](#dependency-updates)
+- [Operational Runbooks](#operational-runbooks)
+- [Review and Merge Requirements](#review-and-merge-requirements)
 - [Local Secret Scanning](#local-secret-scanning)
 - [Testing](#testing)
 - [Internationalization (i18n)](#internationalization-i18n)
@@ -221,6 +225,91 @@ Closes #XX
 
 ## Screenshots (if applicable)
 ```
+
+---
+
+## Code Ownership and Review
+
+Some paths are reviewed by named maintainers before they can be merged, because
+the consequences of a mistake there are not caught by a test suite. If a pull
+request touches any of them, GitHub automatically requests the listed reviewer.
+
+| Area | Paths |
+|---|---|
+| Smart contracts | `contracts/` |
+| Backend auth, authorisation and secret handling | `backend/auth.js`, `backend/authMiddleware.js`, `backend/env.js`, `backend/index.js`, `backend/src/middleware/`, `backend/src/routes/` |
+| Frontend transaction construction | `frontend/src/hooks/useSoroban.js`, `frontend/src/context/FreighterWalletContext.jsx`, `frontend/src/store/useWalletStore.js` |
+| Supply-chain automation and infrastructure | `.github/dependabot.yml`, `renovate.json`, the `render.yaml` / `terraform/` / `k8s/` / `nginx/` deployment topology |
+
+The assignments live in [`.github/CODEOWNERS`](.github/CODEOWNERS); the rules,
+the ordering semantics (the **last** matching pattern wins) and the branch
+protection settings that make the approvals *required* rather than merely
+requested are documented in [docs/code-ownership.md](docs/code-ownership.md).
+
+If you are adding a path that carries financial or security risk, add a rule
+there rather than widening the default.
+
+---
+
+## Dependency Updates
+
+There is one tool per job, and it matters which is which:
+
+| Job | Tool | Configuration |
+|---|---|---|
+| Routine version bumps (npm + cargo) | Renovate | [`renovate.json`](renovate.json) |
+| Security advisories | Dependabot | [`.github/dependabot.yml`](.github/dependabot.yml) |
+| Auditing the current tree for known vulnerabilities | `check-dependency-audit.mjs`, `cargo audit` | [`.github/workflows/dependency-audit.yml`](.github/workflows/dependency-audit.yml) |
+
+Neither bot merges anything by itself. Dependency pull requests are gated on the
+`Dependency Update Gate` workflow, which fails when a manifest and its lockfile
+move out of step. The weekly review cadence, the grouping rules and what to do
+when a bump is declined are in
+[docs/dependency-updates.md](docs/dependency-updates.md).
+
+**Before hand-editing a manifest, run the install command in that directory and
+commit the regenerated lockfile in the same commit.** A pull request that bumps
+`package.json` without updating `package-lock.json` fails the gate, and that is
+the single most common dependency-PR mistake.
+
+---
+
+## Operational Runbooks
+
+Some changes are only reviewable alongside the procedure they affect. These are
+the runbooks the code refers to:
+
+| Runbook | Covers |
+|---|---|
+| [docs/disk-usage-monitoring.md](docs/disk-usage-monitoring.md) | Disk-usage thresholds, the alert signals, and the response procedure for a filling volume holding `DATA_FILE`. |
+| [docs/blue-green-deployment.md](docs/blue-green-deployment.md) | Deploying and rolling back the Render backend and static frontend. |
+| [docs/cloudwatch-incident-runbook.md](docs/cloudwatch-incident-runbook.md) | Incident triage from alarms. |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | What an operator or user should check first, including the public status page. |
+
+If your change introduces a new failure mode that a human has to act on, add the
+response steps to the relevant runbook in the same pull request. An alert with
+no documented response is a page that nobody can action.
+## Review and Merge Requirements
+
+`main` is a protected branch (issue #798). You cannot push to it directly, and a pull request
+cannot be merged until **all** of the following are true:
+
+1. **CI is green** — every required status check has passed on the latest commit. That set
+   includes TruffleHog and gitleaks secret scanning, CodeQL, security linting, `npm audit`,
+   `cargo audit`, and the Soroban fuzz/Wasm checks. The exact list, and why path-filtered
+   workflows are deliberately *not* required, is in
+   [docs/branch-protection.md](docs/branch-protection.md).
+2. **At least one approval** from a maintainer who did not author the change. An approval is
+   dismissed when new commits are pushed, so re-request a review after a review-driven rewrite.
+3. **Every review conversation is resolved.**
+4. **The branch is up to date with `main`** and has a linear history (no merge commits). Rebase
+   rather than merge.
+
+Force-pushes to `main` and deleting `main` are disabled, and the rules apply to maintainers as
+well as to external contributors. Merge your own pull request only after it has been approved.
+
+The desired settings are version-controlled in `.github/branch-protection.json`; apply or verify
+them with `./scripts/branch-protection.sh apply` / `check` using a token that has admin access.
 
 ---
 

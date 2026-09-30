@@ -125,6 +125,10 @@ When an incident is detected:
 - If a frontend XSS is found, take the site down or serve a safe version.
 - Block malicious IPs at the nginx / firewall level.
 
+For the full, coordinated sequence across all three tiers (contract →
+frontend/edge → backend → communication), follow the
+[Incident Response Playbook](./incident-response.md).
+
 ### 4. Eradication
 
 - Deploy a fix: upgrade smart contract, patch backend code, fix frontend.

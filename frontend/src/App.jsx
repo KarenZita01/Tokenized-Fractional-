@@ -1,21 +1,19 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Networks, nativeToScVal } from '@stellar/stellar-sdk';
 import { useTranslation } from 'react-i18next';
 
-import Header from './components/Header/Header';
-import Navbar from './components/Navbar/Navbar';
 import Card from './components/Card/Card';
 import Alert from './components/Alert/Alert';
 import NetworkBadge from './components/NetworkBadge/NetworkBadge';
 import Button from './components/Button/Button';
 import Skeleton from './components/Skeleton/Skeleton';
+import Input from './components/Input/Input';
 import AssetGrid from './components/AssetGrid/AssetGrid';
 import BuyShares from './components/BuyShares/BuyShares';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
 import LanguageSwitcher from './components/LanguageSwitcher/LanguageSwitcher';
-import TransactionHistory from './components/TransactionHistory/TransactionHistory';
 import ProfilePage from './components/ProfilePage/ProfilePage';
 import styles from './App.module.css';
 import Breadcrumbs from './components/Breadcrumbs/Breadcrumbs';
@@ -44,11 +42,22 @@ import { WS_EVENT_TYPES } from './hooks/useWebSocket';
 import { useGraphQLSubscription } from './hooks/useGraphQLSubscription';
 import { useOfflineSync } from './hooks/useOfflineSync';
 import { useWalletDiscovery } from './hooks/useWalletDiscovery';
+import { useDebouncedCallback } from './hooks/useDebounce';
+import { usePendingTransaction } from './hooks/usePendingTransaction';
 import OfflineIndicator from './components/OfflineIndicator/OfflineIndicator';
 import WalletSelector from './components/WalletSelector/WalletSelector';
 import NetworkMismatchBanner from './components/NetworkMismatchBanner';
 import useNetworkMismatch from './hooks/useNetworkMismatch';
 import OnboardingTour from './components/OnboardingTour';
+import WalletAddressBadge from './components/WalletAddressBadge/WalletAddressBadge';
+import ContractVerificationBanner from './components/ContractVerificationBanner/ContractVerificationBanner';
+import PreferencesPanel from './components/PreferencesPanel/PreferencesPanel';
+import OptimizedImage from './components/OptimizedImage/OptimizedImage';
+import VirtualTour from './components/VirtualTour/VirtualTour';
+import ShortcutHelpModal from './components/ShortcutHelp/ShortcutHelp';
+import Spinner from './components/Spinner/Spinner';
+import useContractManifest from './hooks/useContractManifest';
+import Footer from './components/Footer/Footer';
 import { setQueryData, applySubscriptionDelta } from './services/queryCache';
 
 // ── Route-based code splitting (Issue #304) ──────────────────────────────────
@@ -125,7 +134,14 @@ const MarketplacePage = React.memo(
     loadingBuy,
     handleBuyShares,
     pricePerShare,
+    hasNextPage,
+    fetchNextPage,
   }) => {
+    // Debounce the buyAmount setter to prevent rapid successive state updates
+    // that could trigger redundant RPC calls or expensive recalculations
+    const debouncedSetBuyAmount = useDebouncedCallback((val) => {
+      setBuyAmount(val);
+    }, 400); // 400ms debounce delay
     const isTestnet = NETWORK_PASSPHRASE === Networks.TESTNET;
     return (
       <>
@@ -234,19 +250,42 @@ const MarketplacePage = React.memo(
               )}
             </div>
             <hr className={styles.divider} />
+            
+            {/* ── Pending Transaction Recovery Alert (Issue #719) ─────────────────── */}
+            {hasPendingTx && (
+              <Alert variant="warning">
+                {recoveringTx ? (
+                  <>
+                    <Spinner size="sm" label="Checking transaction status…" />
+                    <span>Checking the status of your pending transaction…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>You have a pending transaction from your previous session. </span>
+                    <span style={{ fontWeight: 'bold' }}>Please wait for it to complete before starting a new purchase.</span>
+                  </>
+                )}
+              </Alert>
+            )}
+            
             <h3 className={styles.purchaseHeader}>Buy Fractional Shares</h3>
             <div className={styles.purchaseRow}>
               <Input
                 id="buy-amount-input"
                 type="number"
                 value={buyAmount}
-                onChange={(e) => setBuyAmount(Math.max(1, Number(e.target.value)))}
+                onChange={(e) => debouncedSetBuyAmount(Math.max(1, Number(e.target.value)))}
                 min="1"
-                disabled={loadingBuy}
+                disabled={loadingBuy || hasPendingTx}
                 className={styles.buyInput}
               />
-              <Button onClick={handleBuyShares} loading={loadingBuy} variant="primary">
-                {loadingBuy ? 'Processing…' : 'Buy Shares'}
+              <Button 
+                onClick={handleBuyShares} 
+                loading={loadingBuy} 
+                disabled={hasPendingTx}
+                variant="primary"
+              >
+                {loadingBuy ? 'Processing…' : hasPendingTx ? 'Pending Transaction' : 'Buy Shares'}
               </Button>
             </div>
             {loadingBuy && (
@@ -289,6 +328,15 @@ function App() {
     checkNow: recheckNetwork,
   } = useNetworkMismatch({ enabled: Boolean(publicKey) });
 
+  // ── Official contract deployment check (Issue #792) ─────────────────────────
+  // Cross-check the build-time contract address against the signed canonical
+  // manifest so a misconfigured or tampered build warns the user instead of
+  // silently signing against an unexpected contract.
+  const contractVerification = useContractManifest({
+    contractId: CONTRACT_ID,
+    network: NETWORK_PASSPHRASE,
+  });
+
   const {
     assets,
     assetMeta,
@@ -308,6 +356,7 @@ function App() {
   const [txError, setTxError] = useState(null);
   const [txResult, setTxResult] = useState(null);
   const [lastTxHash, setLastTxHash] = useState(null);
+  const [recoveringTx, setRecoveringTx] = useState(false);
   const addToast = useToastStore((s) => s.addToast);
   const removeToast = useToastStore((s) => s.removeToast);
   const txStatus = useTransactionStatus(lastTxHash);
@@ -316,8 +365,29 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  // ── Pending Transaction Recovery (Issue #719) ─────────────────────────────
+  // Handle recovery of transactions that may be in-flight when the user
+  // refreshes the browser or navigates away during submission.
+  const {
+    pendingTx,
+    setPendingTx,
+    clearPendingTx,
+    hasPendingTx,
+    isExpired,
+    checkPendingTxStatus,
+  } = usePendingTransaction();
+
+  // Debounce the buyAmount setter to prevent rapid successive state updates
+  // that could trigger redundant RPC calls or expensive recalculations
+  const debouncedSetBuyAmount = useDebouncedCallback((val) => {
+    setBuyAmount(val);
+  }, 400); // 400ms debounce delay
+
   const { theme, toggleTheme } = useTheme();
   const [view, setView] = useState('marketplace');
+  // Issue #791/#793: wallet manager modal and the persisted preferences panel.
+  const [walletManagerOpen, setWalletManagerOpen] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   // ── WebSocket for real-time updates (Issues #425, #426) ─────────────────────
   const wsUrl = `ws://${new URL(API_URL).host}/ws`;
@@ -418,7 +488,6 @@ function App() {
   );
 
   // ── Keyboard shortcuts (Issue #194) ─────────────────────────────────────────
-  const [view, setView] = useState('marketplace');
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
 
   useKeyboardShortcuts({
@@ -441,6 +510,13 @@ function App() {
     },
   });
 
+  // On-chain price per share. Read before the confirmation effect below, which
+  // lists it as a dependency — reading it later in the body would hit the TDZ.
+  const { data: priceData } = useSorobanRead('get_price', [], {
+    skip: CONTRACT_ID.length < 50,
+  });
+  const pricePerShare = priceData?.retval ? Number(priceData.retval.u64()) : null;
+
   // Track purchase details for WebSocket broadcast
   const lastPurchaseRef = useRef({ amount: null, timestamp: null });
 
@@ -454,6 +530,9 @@ function App() {
       }
       addToast({ message: TX_CONFIRMED, type: 'success', txHash: lastTxHash });
       setTxResult(null);
+
+      // Clear pending transaction marker on successful confirmation
+      clearPendingTx();
 
       // Broadcast share purchase event to WebSocket subscribers
       if (publicKey && lastPurchaseRef.current.amount && pricePerShare) {
@@ -479,8 +558,74 @@ function App() {
       }
       addToast({ message: TX_FAILED, type: 'error', txHash: lastTxHash });
       setTxError(null);
+      
+      // Clear pending transaction marker on failure
+      clearPendingTx();
     }
-  }, [lastTxHash, txStatus, publicKey, pricePerShare]);
+  }, [lastTxHash, txStatus, publicKey, pricePerShare, clearPendingTx]);
+
+  // ── Pending Transaction Recovery Check (Issue #719) ─────────────────────
+  // On page load, check if there's a pending transaction and attempt recovery
+  useEffect(() => {
+    if (!hasPendingTx || !publicKey || recoveringTx) return;
+
+    const recoverTransaction = async () => {
+      setRecoveringTx(true);
+      try {
+        const status = await checkPendingTxStatus();
+        
+        if (!status) {
+          // Couldn't check status, but clear the marker to avoid blocking
+          clearPendingTx();
+          setRecoveringTx(false);
+          return;
+        }
+
+        if (status.status === 'confirmed') {
+          // Transaction was confirmed while we were away
+          addToast({
+            message: 'Your previous transaction was confirmed! Refreshing your balance...',
+            type: 'success',
+            txHash: status.txHash,
+          });
+          setLastTxHash(status.txHash);
+          clearPendingTx();
+          fetchShares();
+        } else if (status.status === 'failed') {
+          // Transaction failed while we were away
+          addToast({
+            message: 'Your previous transaction failed. You can try again.',
+            type: 'error',
+            txHash: status.txHash,
+          });
+          clearPendingTx();
+        } else if (status.status === 'pending') {
+          // Transaction is still pending, continue monitoring
+          addToast({
+            message: 'Detecting a pending transaction from your previous session. Monitoring for confirmation...',
+            type: 'warning',
+            txHash: status.txHash,
+          });
+          setLastTxHash(status.txHash);
+        } else {
+          // Unknown status, clear to avoid blocking
+          addToast({
+            message: 'Unable to determine the status of your previous transaction. You can try again.',
+            type: 'warning',
+          });
+          clearPendingTx();
+        }
+      } catch (error) {
+        console.error('Transaction recovery failed:', error);
+        // Clear the marker to avoid blocking the user
+        clearPendingTx();
+      } finally {
+        setRecoveringTx(false);
+      }
+    };
+
+    recoverTransaction();
+  }, [hasPendingTx, publicKey, checkPendingTxStatus, clearPendingTx, fetchShares, addToast]);
 
   useEffect(() => {
     checkConnection();
@@ -509,9 +654,6 @@ function App() {
 
   const buySharesTx = useSorobanWrite('buy_shares');
   const loadingBuy = buySharesTx.loading;
-
-  const { data: priceData, loading: loadingPrice } = useSorobanRead('get_price', [], { skip: CONTRACT_ID.length < 50 });
-  const pricePerShare = priceData?.retval ? Number(priceData.retval.u64()) : null;
 
   const { data: availableSharesData } = useSorobanRead('get_available_shares', [], {
     skip: CONTRACT_ID.length < 50,
@@ -650,6 +792,16 @@ function App() {
       recheckNetwork();
       return;
     }
+    
+    // Prevent new purchase if there's already a pending transaction
+    if (hasPendingTx) {
+      addToast({
+        message: 'You have a pending transaction. Please wait for it to complete before starting a new purchase.',
+        type: 'error',
+      });
+      return;
+    }
+    
     setTxResult(null);
     setLastTxHash(null);
     try {
@@ -660,13 +812,32 @@ function App() {
       // Store purchase details for WebSocket broadcast on confirmation
       lastPurchaseRef.current = { amount: buyAmount, timestamp: Date.now() };
 
+      // Set pending transaction marker before submission (Issue #719)
+      setPendingTx({
+        txHash: null, // Will be set after submission
+        amount: buyAmount,
+        contractId: CONTRACT_ID,
+        publicKey,
+      });
+
       const submitRes = await buySharesTx.execute([scValBuyer, scValShares, scValToken]);
       setConfirmPending(false);
       const { hash } = submitRes;
       setLastTxHash(hash);
+      
+      // Update pending transaction with the actual hash
+      setPendingTx({
+        txHash: hash,
+        amount: buyAmount,
+        contractId: CONTRACT_ID,
+        publicKey,
+      });
+      
       pendingToastRef.current = addToast({ message: TX_SUBMITTED, type: 'pending', txHash: hash });
     } catch (err) {
       setConfirmPending(false);
+      // Clear pending transaction marker on submission error
+      clearPendingTx();
       addToast(toToastError(err, { operation: 'buy_shares' }));
     }
   };
@@ -734,20 +905,12 @@ function App() {
               connecting={isConnecting}
             />
           ) : (
-            <div className={styles.walletInfo}>
-              {/* Clicking public key re-opens WalletManager */}
-              <button
-                className={styles.publicKey}
-                title={`${publicKey} — click to manage wallet`}
-                onClick={() => setWalletManagerOpen(true)}
-                aria-label="Manage wallet connection"
-              >
-                {publicKey.slice(0, 8)}…{publicKey.slice(-6)}
-              </button>
-              <Button onClick={disconnectWallet} variant="danger">
-                {t('wallet.disconnect')}
-              </Button>
-            </div>
+            <WalletAddressBadge
+              publicKey={publicKey}
+              onManage={() => setWalletManagerOpen(true)}
+              onDisconnect={disconnectWallet}
+              disconnectLabel={t('wallet.disconnect')}
+            />
           )}
         </div>
       </header>
@@ -760,11 +923,19 @@ function App() {
         onRetry={recheckNetwork}
       />
 
+      {/* ── Official contract deployment warning (Issue #792) ───────────────── */}
+      <ContractVerificationBanner
+        status={contractVerification.status}
+        reason={contractVerification.reason}
+        configuredContractId={contractVerification.contractId}
+        manifestUrl={contractVerification.manifestUrl}
+      />
+
       {/* ── Tab Navigation ──────────────────────────────────────────────────── */}
       <nav className={styles.tabs}>
         <button
           className={`${styles.tab} ${view === 'marketplace' || view === 'asset-detail' ? styles.tabActive : ''}`}
-          onClick={() => { setView('marketplace'); setSelectedAsset(null); }}
+          onClick={() => setView('marketplace')}
         >
           {t('nav.marketplace')}
         </button>
@@ -799,6 +970,12 @@ function App() {
           onClick={() => setView('profile')}
         >
           Profile
+        </button>
+        <button
+          className={`${styles.tab} ${preferencesOpen ? styles.tabActive : ''}`}
+          onClick={() => setPreferencesOpen(true)}
+        >
+          Preferences
         </button>
       </nav>
 
@@ -1016,6 +1193,8 @@ function App() {
                   pricePerShare={pricePerShare}
                   buyAmount={buyAmount}
                   onBuyAmountChange={setBuyAmount}
+                  hasPendingTx={hasPendingTx}
+                  recoveringTx={recoveringTx}
                 />
               </ErrorBoundary>
             )}
@@ -1048,7 +1227,6 @@ function App() {
             </ErrorBoundary>
           </>
         )}
-      </Suspense>
 
       {confirmPending && (
         <ConfirmPurchase
@@ -1059,6 +1237,14 @@ function App() {
           loading={loadingBuy}
         />
       )}
+
+      {/* Wallet manager modal (Issue #791) */}
+      <Suspense fallback={null}>
+        <WalletManager isOpen={walletManagerOpen} onClose={() => setWalletManagerOpen(false)} />
+      </Suspense>
+
+      {/* Preferences panel (Issue #793) */}
+      <PreferencesPanel open={preferencesOpen} onClose={() => setPreferencesOpen(false)} />
 
       {/* Keyboard shortcut help modal (Issue #194: Ctrl+/) */}
       <ShortcutHelpModal open={shortcutHelpOpen} onClose={() => setShortcutHelpOpen(false)} />
@@ -1095,6 +1281,9 @@ function App() {
         </kbd>{' '}
         for help
       </div>
+
+      {/* ── Footer (Issue #797: link to the independent public status page) ── */}
+      <Footer />
     </div>
   );
 }

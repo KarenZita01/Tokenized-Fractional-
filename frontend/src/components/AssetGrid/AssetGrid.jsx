@@ -1,7 +1,6 @@
 import React, { memo, useCallback, useRef } from 'react';
 import AssetCard from '../AssetCard/AssetCard';
 import { AssetCardSkeleton } from '../Skeleton';
-import AssetCardSkeleton from '../Skeleton/AssetCardSkeleton';
 import VirtualList from '../VirtualList/VirtualList';
 import Card from '../Card/Card';
 import EmptyState from '../EmptyState/EmptyState';

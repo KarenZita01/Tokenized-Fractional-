@@ -155,5 +155,8 @@
     "es": "Español",
     "fr": "Francés",
     "de": "Alemán"
+  },
+  "footer": {
+    "status": "Estado del servicio"
   }
 }

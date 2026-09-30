@@ -368,8 +368,8 @@ v1.get('/rwa/:contractId', async (req, res) => {
  * /api/v1/rwa:
  *   post:
  *     tags: [Assets]
- *     summary: Create or update an asset
- *     description: Create a new RWA asset or update an existing one by contract ID. Admin only.
+ *     summary: Create an asset
+ *     description: Create-only — a POST for an existing contractId returns 409 Conflict. Use PATCH to update. Admin only.
  *     security: [{ ApiKeyAuth: [] }]
  *     requestBody:
  *       required: true
@@ -410,6 +410,16 @@ v1.post('/rwa', adminAuth, writeLimiter, async (req, res) => {
   if (validationError) return res.status(400).json({ error: validationError });
 
   const data = loadData();
+
+  // Issue #706: POST is create-only — reject a colliding contractId instead of
+  // silently overwriting the existing asset's metadata.
+  if (data[contractId]) {
+    return res.status(409).json({
+      error: `Asset with contract ID ${contractId} already exists. Use PATCH /api/v1/rwa/${contractId} to update it.`,
+      code: 'ASSET_ALREADY_EXISTS',
+    });
+  }
+
   const now  = new Date().toISOString();
   data[contractId] = {
     id:             metadata.id || contractId,
